@@ -66,11 +66,11 @@ export default function Home() {
   const days = RANGES.find(r => r.id === range)?.days
   const view = useMemo(() => sliceRange(Array.isArray(bars) ? bars : [], days), [bars, days])
 
-  const limit = field(order, "suggested_limit_price")
   const todayClose = field(order, "today_close")
   const todayRsi = field(order, "today_rsi")
-  const targetRsi = field(order, "target_rsi")
-  const pct = field(order, "pct_from_close")
+  const asOf = field(order, "as_of")
+  const inZone = field(order, "already_in_buy_zone")
+  const ladder = field(order, "ladder") || []
   const note = field(order, "note")
   const results = field(bt, "results")
 
@@ -123,9 +123,25 @@ export default function Home() {
         {view.length > 0 ? <PriceChart rows={view} /> : <div style={{ padding: 24, color: "#6b7280" }}>图加载中…</div>}
       </div>
 
-      {order && !order.error && limit != null && (
-        <div style={{ border: "1px solid #fca5a5", borderRadius: 8, padding: 16, marginBottom: 24, background: "#fef2f2" }}>
-          <b>Limit order suggestion</b>: buy {sym} at <b>{limit}</b> (today close {todayClose}, RSI {todayRsi}, target RSI {targetRsi}). ~{pct}% below close. {note}
+      {order && !order.error && (
+        <div style={{ border: "1px solid #86efac", borderRadius: 8, padding: 16, marginBottom: 24, background: "#f0fdf4" }}>
+          <b>分批买入</b>
+          <div style={{ margin: "6px 0 10px" }}>
+            截至 {asOf} 收盘 <b>{todayClose}</b>，RSI <b>{todayRsi}</b>。
+            {inZone ? " 已在买区：现价可以买，更低继续买。" : " 还没到买区：只挂现价下方。"}
+          </div>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14 }}>
+            <tbody>
+              {ladder.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "4px 12px 4px 0", fontWeight: 700 }}>{field(r, "price")}</td>
+                  <td style={{ padding: 4, color: "#6b7280" }}>{field(r, "pct_from_close")}%</td>
+                  <td style={{ padding: 4 }}>{field(r, "action")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 8, color: "#4b5563", fontSize: 13 }}>{note}</div>
         </div>
       )}
 
