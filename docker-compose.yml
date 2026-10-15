@@ -39,7 +39,7 @@ services:
   web:
     build: ./web
     ports:
-      - "3000:3000"
+      - "3333:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
     restart: unless-stopped
