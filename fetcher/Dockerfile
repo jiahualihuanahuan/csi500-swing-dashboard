@@ -1,0 +1,4 @@
+FROM python:3.12-slim
+RUN pip install --no-cache-dir akshare pandas psycopg2-binary
+COPY fetcher.py ./
+CMD ["python", "fetcher.py"]

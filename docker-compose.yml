@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: csi500
+      POSTGRES_USER: csi500
+      POSTGRES_PASSWORD: csi500
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      - test: ["CMD-SHELL", "pg_isready -U csi500"]
+      - interval: 5s
+      - timeout: 3s
+      - retries: 10
+
+  fetcher:
+    build: ./fetcher
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://csi500:csi500@postgres:5432/csi500
+      FETCH_INTERVAL_SEC: 60
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://csi500:csi500@postgres:5432/csi500
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    restart: unless-stopped
+
+  # Optional: Ollama news digest. Off unless OLLAMA_URL is set.
+  # news-digest:
+  #   build: ./news-digest
+  #   environment:
+  #     OLLAMA_URL: http://host.docker.internal:11434
+  #     OLLAMA_MODEL: qwen3.5:9b
+  #   depends_on: [postgres]
+  #   profiles: ["news"]
+
+volumes:
+  pgdata:
