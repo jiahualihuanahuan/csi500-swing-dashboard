@@ -33,35 +33,61 @@ def conn():
 
 def init():
     """初始化数据库表 / Initialize DB table."""
-    with conn() as c:
-        c.execute(DDL)
+    c = conn()
+    try:
+        with c.cursor() as cur:
+            cur.execute(DDL)
         c.commit()
+    finally:
+        c.close()
 
 def upsert(symbol, df):
     """写入或更新K线数据 / Upsert OHLCV bars."""
     if df is None or df.empty:
         return 0
-    rows = [(symbol, r.date, r.open, r.high, r.low, r.close, r.volume) for r in df.itertuples()]
-    with conn() as c:
-        execute_values(c.cursor(),
-            "INSERT INTO bars VALUES %s ON CONFLICT (symbol, trade_date) DO UPDATE SET open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, volume=EXCLUDED.volume",
-            rows)
+    rows = [
+        (symbol, r.date, r.open, r.high, r.low, r.close, r.volume)
+        for r in df.itertuples(index=False)
+    ]
+    c = conn()
+    try:
+        with c.cursor() as cur:
+            execute_values(
+                cur,
+                "INSERT INTO bars VALUES %s ON CONFLICT (symbol, trade_date) DO UPDATE SET open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, close=EXCLUDED.close, volume=EXCLUDED.volume",
+                rows,
+            )
         c.commit()
+    finally:
+        c.close()
     return len(rows)
+
+def bare(code):
+    """akshare 要 6 位代码，不要 sh/sz 前缀。"""
+    return code[-6:]
+
+def _clean(df):
+    df = df.rename(columns={"日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume"})
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    for col in ("open", "high", "low", "close", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df[["date", "open", "high", "low", "close", "volume"]].dropna(subset=["date", "close"])
 
 def fetch_index(code):
     """抓取A股指数日线 / Fetch A-share index daily bars."""
-    df = ak.index_zh_a_hist(symbol=code, period="daily", start_date="20150101", end_date=dt.date.today().strftime("%Y%m%d"))
-    df = df.rename(columns={"日期":"date","开盘":"open","最高":"high","最低":"low","收盘":"close","成交量":"volume"})
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-    return df[["date","open","high","low","close","volume"]]
+    df = ak.index_zh_a_hist(
+        symbol=bare(code), period="daily",
+        start_date="20150101", end_date=dt.date.today().strftime("%Y%m%d"),
+    )
+    return _clean(df)
 
 def fetch_etf(code):
     """抓取ETF日线（前复权）/ Fetch ETF daily bars (forward-adjusted)."""
-    df = ak.fund_etf_hist_em(symbol=code, period="daily", start_date="20150101", end_date=dt.date.today().strftime("%Y%m%d"), adjust="qfq")
-    df = df.rename(columns={"日期":"date","开盘":"open","最高":"high","最低":"low","收盘":"close","成交量":"volume"})
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-    return df[["date","open","high","low","close","volume"]]
+    df = ak.fund_etf_hist_em(
+        symbol=bare(code), period="daily",
+        start_date="20150101", end_date=dt.date.today().strftime("%Y%m%d"), adjust="qfq",
+    )
+    return _clean(df)
 
 def main():
     init()

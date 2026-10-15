@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
-const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Rewrites run inside the web container, so this must be the docker service
+// name. localhost:8000 inside that container is not the api.
+const apiUrl = process.env.API_INTERNAL_URL || 'http://api:8000';
 
 const nextConfig = {
   reactStrictMode: true,

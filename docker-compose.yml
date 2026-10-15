@@ -39,11 +39,9 @@ services:
     build:
       context: ./web
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8000
+        API_INTERNAL_URL: http://api:8000
     ports:
       - "3333:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
     restart: unless-stopped
 
   # Optional: Ollama news digest. Off unless OLLAMA_URL is set.

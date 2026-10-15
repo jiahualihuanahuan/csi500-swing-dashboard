@@ -9,6 +9,29 @@ app = FastAPI(title="CSI500 API 中证500 API", description="中证500指数与E
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 DB = os.environ["DATABASE_URL"]
 
+DDL = """
+CREATE TABLE IF NOT EXISTS bars (
+    symbol TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    open DOUBLE PRECISION,
+    high DOUBLE PRECISION,
+    low DOUBLE PRECISION,
+    close DOUBLE PRECISION,
+    volume DOUBLE PRECISION,
+    PRIMARY KEY (symbol, trade_date)
+);
+"""
+
+@app.on_event("startup")
+def init_db():
+    c = psycopg2.connect(DB)
+    try:
+        with c.cursor() as cur:
+            cur.execute(DDL)
+        c.commit()
+    finally:
+        c.close()
+
 def q(sql, params=None):
     with psycopg2.connect(DB) as c:
         return pd.read_sql(sql, c, params=params)
