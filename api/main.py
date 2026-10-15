@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS bars (
 );
 """
 
+# 相对强弱越低，建议拿到的仓位越大。不因为跌破50日均线就改成空仓。
+# 高于25：空仓。到25：一成。到20：三成。到15：四成。低于10：六成。
+POSITION_LADDER = (
+    (10, 0.60, "六成（60%）"),
+    (15, 0.40, "四成（40%）"),
+    (20, 0.30, "三成（30%）"),
+    (25, 0.10, "一成（10%）"),
+)
+
 @app.on_event("startup")
 def init_db():
     c = psycopg2.connect(DB)
@@ -38,7 +47,6 @@ def q(sql, params=None):
         return pd.read_sql(sql, c, params=params)
 
 def sanitize(df):
-    """Drop unfinished bars. A null close becomes NaN RSI and breaks JSON."""
     if df is None or df.empty:
         return df
     df = df.copy()
@@ -55,6 +63,14 @@ def num(x, nd=3):
     if not np.isfinite(v):
         return None
     return round(v, nd)
+
+def position_for_rsi(rsi):
+    if rsi is None or not np.isfinite(rsi):
+        return 0.0, "算不出来"
+    for ceiling, weight, label in POSITION_LADDER:
+        if rsi <= ceiling:
+            return weight, label
+    return 0.0, "空仓"
 
 @app.get("/health")
 def health():
@@ -110,15 +126,14 @@ CHART_FIELDS = (
     "rsi", "k", "d", "j", "macd", "signal", "hist", "zscore",
 )
 
-@app.get("/api/chart/{symbol}", summary="日线加指标 / Daily bars with indicators")
+@app.get("/api/chart/{symbol}", summary="日线加指标")
 def chart(symbol: str):
-    """全历史计算后返回。前端再按 6个月/年截取，避免窗口左边指标是空的。"""
     df = sanitize(q(
         "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date",
         [symbol],
     ))
     if df.empty:
-        return {"error": "no data 无数据"}
+        return {"error": "还没有数据"}
     df = add_indicators(df)
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
     nd = {"volume": 0, "rsi": 1, "k": 1, "d": 1, "j": 1, "macd": 4, "signal": 4, "hist": 4, "zscore": 2}
@@ -153,29 +168,30 @@ def simulate(df, rsi_buy=30, rsi_buy2=20, rsi_sell=70, macd_exit=True, trend_fil
         trades.append((df.iloc[-1].date, entry, df.iloc[-1].close, pos, "open 未平仓"))
     return trades
 
-def tier_of(trades):
-    if trades and str(trades[-1][4]).startswith("open"):
-        pos = trades[-1][3]
-        return {0.5: "half 半仓", 0.7: "add 补仓"}.get(pos, str(pos))
-    return "flat 空仓"
-
-@app.get("/api/signals/{symbol}", summary="最新信号 / Latest signals")
+@app.get("/api/signals/{symbol}", summary="最新信号")
 def signals(symbol: str):
     df = sanitize(q("SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date", [symbol]))
     if df.empty:
-        return {"error": "no data 无数据"}
+        return {"error": "还没有数据"}
     df = add_indicators(df)
     last = df.iloc[-1]
-    pos = tier_of(simulate(df))
+    rsi_now = None if pd.isna(last.rsi) else float(last.rsi)
+    _, label = position_for_rsi(rsi_now)
+    ma = num(last.ma50)
+    ma_txt = None
+    if ma is not None:
+        ma_txt = f"{ma}，价格在它{'下' if last.close < last.ma50 else '上'}面"
+    rsi_txt = None if rsi_now is None else f"{num(rsi_now, 1)}，越低越该买"
     return {
-        "date": str(last.date), "close 收盘价": num(last.close),
-        "rsi 相对强弱指数": num(last.rsi, 1), "k": num(last.k, 1), "d": num(last.d, 1), "j": num(last.j, 1),
-        "macd_hist MACD柱状图": num(last.hist, 4), "ma50 50日均线": num(last.ma50),
-        "bb_low 布林下轨": num(last.bb_low), "position_tier 建议仓位": pos,
+        "日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
+        "收盘价": num(last.close),
+        "相对强弱": rsi_txt,
+        "50日均线": ma_txt,
+        "布林下轨": num(last.bb_low),
+        "建议仓位": label,
     }
 
 def _rsi_per_percent(df):
-    """Median RSI points gained when price rises 1%. Positive in a normal market."""
     ret = df["close"].pct_change()
     drsi = df["rsi"].diff()
     sens = (drsi / (ret * 100)).replace([np.inf, -np.inf], np.nan).dropna()
@@ -192,50 +208,51 @@ def _rung(close, price, action):
         "action 动作": action,
     }
 
-@app.get("/api/orders/suggest", summary="限价单建议 / Limit order suggestion")
+@app.get("/api/orders/suggest", summary="限价单建议")
 def order_suggest(symbol: str = "etf_510500"):
-    """只给现价或更低的买入限价。RSI 已经低于 30 时现价就买，再低继续买，不等弹回 20/25。"""
     df = sanitize(q(
         "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date DESC LIMIT 60",
         [symbol],
     ))
     if len(df) < 16:
-        return {"error": "not enough data 数据不足"}
+        return {"error": "数据不够"}
     df = df.iloc[::-1].reset_index(drop=True)
     df = add_indicators(df)
     last = df.iloc[-1]
     if pd.isna(last.rsi) or pd.isna(last.close) or last.close <= 0:
-        return {"error": "rsi not ready RSI未就绪"}
+        return {"error": "相对强弱还没算出来"}
     close = float(last.close)
     rsi_now = float(last.rsi)
+    _, label = position_for_rsi(rsi_now)
     sens = _rsi_per_percent(df)
     ladder = []
-    if rsi_now <= 30:
-        ladder.append(_rung(close, close, "现价买入。RSI 已低于 30，这就是买点"))
-        for pct, label in ((0.03, "再低 3%，继续买"), (0.06, "再低 6%，继续买"), (0.09, "再低 9%，继续买")):
-            ladder.append(_rung(close, close * (1 - pct), label))
+    if rsi_now <= 25:
+        ladder.append(_rung(close, close, f"现价买入，目标拿到{label}"))
+        for pct, text in ((0.03, "再低3%，继续买"), (0.06, "再低6%，继续买"), (0.09, "再低9%，继续买")):
+            ladder.append(_rung(close, close * (1 - pct), text))
         if pd.notna(last.bb_low) and float(last.bb_low) < close * 0.995:
             ladder.append(_rung(close, float(last.bb_low), "布林下轨，再买一笔"))
-        note = "已经在超卖区。限价只挂现价或更低，越低越买。不要等 RSI 弹回 20 或 25 再买。非投资建议。"
+        note = f"相对强弱 {num(rsi_now, 1)}，建议仓位{label}。跌破50日均线也不改成空仓。越低仓位越大：25是一成，20是三成，15是四成，10以下是六成。非投资建议。"
     else:
-        for target, label in ((30, "跌到 RSI 30，第一笔"), (20, "再跌到 RSI 20，加仓")):
+        for target, text in ((25, "跌到相对强弱25，先买一成"), (20, "再跌到20，加到三成")):
             pct = (target - rsi_now) / sens / 100.0
             px = close * (1 + pct)
             if px < close * 0.999:
-                ladder.append(_rung(close, px, label))
-        note = "还没到买区。下面的价都在现价下方，是按近期涨跌估的，不是等反弹。非投资建议。"
+                ladder.append(_rung(close, px, text))
+        note = "还没到买区。下面的价都在现价下方，不是等它涨回去。非投资建议。"
     ladder.sort(key=lambda x: -x["price 价格"])
     return {
         "symbol": symbol,
         "as_of 日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
         "today_close 今日收盘价": num(close),
         "today_rsi 今日RSI": num(rsi_now, 1),
-        "already_in_buy_zone 已在买区": bool(rsi_now <= 30),
+        "建议仓位": label,
+        "already_in_buy_zone 已在买区": bool(rsi_now <= 25),
         "ladder 分批限价": ladder,
         "note 说明": note,
     }
 
-@app.get("/api/backtest", summary="回测胜率表 / Backtest win-rate table")
+@app.get("/api/backtest", summary="回测胜率表")
 def backtest(symbol: str = "etf_510500", start: str = "2022-01-01", end: str | None = None):
     if not end:
         end = dt.date.today().isoformat()
@@ -244,7 +261,7 @@ def backtest(symbol: str = "etf_510500", start: str = "2022-01-01", end: str | N
         [symbol, start, end],
     ))
     if len(df) < 100:
-        return {"error": f"only {len(df)} bars 仅{len(df)}根K线"}
+        return {"error": f"只有{len(df)}根日线"}
     grid = []
     for rsi_buy in (25, 30, 35):
         for rsi_buy2 in (15, 20):
@@ -265,4 +282,4 @@ def backtest(symbol: str = "etf_510500", start: str = "2022-01-01", end: str | N
                             "total_return_pct 总收益%": round((float(np.prod([1 + r for r in rets])) - 1) * 100, 1),
                         })
     grid.sort(key=lambda x: (-x["win_rate 胜率%"], -x["total_return_pct 总收益%"]))
-    return {"symbol": symbol, "period 区间": f"{start} to {end}", "n_bars K线数": len(df), "results 结果": grid[:15]}
+    return {"symbol": symbol, "period 区间": f"{start} 到 {end}", "n_bars K线数": len(df), "results 结果": grid[:15]}

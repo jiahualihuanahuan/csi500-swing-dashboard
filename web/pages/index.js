@@ -3,6 +3,9 @@ import PriceChart from "../components/PriceChart"
 
 const API = ""
 const RANGES = [
+  { id: "1w", label: "1周", days: 7 },
+  { id: "1m", label: "1个月", days: 31 },
+  { id: "3m", label: "3个月", days: 92 },
   { id: "6m", label: "6个月", days: 183 },
   { id: "1y", label: "1年", days: 365 },
   { id: "3y", label: "3年", days: 365 * 3 },
@@ -36,18 +39,6 @@ function sliceRange(rows, days) {
   start.setDate(start.getDate() - days)
   const iso = start.toISOString().slice(0, 10)
   return rows.filter(r => r.date >= iso)
-}
-
-function zhKey(k) {
-  if (k === "date") return "日期"
-  if (k === "k" || k === "d" || k === "j") return k.toUpperCase()
-  const i = k.indexOf(" ")
-  return i === -1 ? k : k.slice(i + 1)
-}
-
-function zhVal(v) {
-  if (typeof v !== "string") return v ?? "-"
-  return v.replace(/^(half|add|flat|full|light) /, "")
 }
 
 function onOff(v) {
@@ -103,6 +94,9 @@ export default function Home() {
   const ladder = field(order, "ladder") || []
   const note = field(order, "note")
   const results = field(bt, "results")
+  const cards = sig && !sig.error
+    ? Object.entries(sig).filter(([k, v]) => v != null && v !== "" && !k.startsWith("_"))
+    : []
 
   return (
     <div style={{ fontFamily: "system-ui", maxWidth: 1180, margin: "0 auto", padding: 24 }}>
@@ -120,24 +114,29 @@ export default function Home() {
         </div>
       )}
 
-      {sig && !sig.error && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12, marginBottom: 24 }}>
-          {Object.entries(sig).filter(([k]) => !k.startsWith("_")).map(([k, v]) => (
-            <div key={k} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 12 }}>
-              <div style={{ color: "#6b7280", fontSize: 12 }}>{zhKey(k)}</div>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{zhVal(v)}</div>
-            </div>
-          ))}
+      {cards.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+            {cards.map(([k, v]) => (
+              <div key={k} style={{ border: k === "建议仓位" ? "2px solid #16a34a" : "1px solid #e5e7eb", borderRadius: 8, padding: 12, background: k === "建议仓位" ? "#f0fdf4" : "#fff" }}>
+                <div style={{ color: "#6b7280", fontSize: 12 }}>{k}</div>
+                <div style={{ fontSize: k === "建议仓位" ? 26 : 20, fontWeight: 700 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ color: "#4b5563", fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
+            相对强弱是 0 到 100，越低越便宜。仓位按这个数加，不因为跌破 50 日均线就改成空仓。高于 25 空仓；到 25 买一成；到 20 拿到三成；到 15 拿到四成；低于 10 拿到六成。
+          </div>
         </div>
       )}
 
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ margin: "20px 0 28px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
           <h2 style={{ margin: "0 0 8px" }}>走势</h2>
           <div>
             {RANGES.map(r => (
               <button key={r.id} onClick={() => setRange(r.id)}
-                style={{ marginLeft: 6, padding: "4px 10px", borderRadius: 6, border: range === r.id ? "2px solid #2563eb" : "1px solid #ccc", background: range === r.id ? "#dbeafe" : "#fff" }}>{r.label}</button>
+                style={{ marginLeft: 6, marginBottom: 6, padding: "4px 10px", borderRadius: 6, border: range === r.id ? "2px solid #2563eb" : "1px solid #ccc", background: range === r.id ? "#dbeafe" : "#fff" }}>{r.label}</button>
             ))}
           </div>
         </div>
@@ -168,9 +167,9 @@ export default function Home() {
 
       {results && (
         <div>
-          <h2>回测：哪组买卖规则更赚</h2>
+          <h2>另一组历史试验</h2>
           <p style={{ color: "#4b5563", fontSize: 13, marginTop: 0 }}>
-            每一行是一套规则，按胜率从高到低排。区间 {field(bt, "period")}，共 {field(bt, "n_bars")} 根日线。
+            这张表不是上面的建议仓位。它比的是旧规则：跌到买入线买一半，再跌到补仓线加到七成。「破均线就走」打开时，跌破50日均线会变成空仓，所以会跟上面的建议不一样。区间 {field(bt, "period")}，共 {field(bt, "n_bars")} 根日线。
           </p>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
             <thead>
@@ -193,13 +192,7 @@ export default function Home() {
             </tbody>
           </table>
           <div style={{ color: "#4b5563", fontSize: 13, lineHeight: 1.6, marginTop: 10 }}>
-            <div>买入线：相对强弱跌到这个数，先买一半仓。</div>
-            <div>补仓线：再跌到这个数，加到七成仓。不是等它涨回去。</div>
-            <div>卖出线：相对强弱涨过这个数就卖。</div>
-            <div>转弱就卖：开，表示红柱变成绿柱时也卖；关，表示不看这个。</div>
-            <div>破均线就走：开，表示价格跌破50日均线就清仓，并且先不买新的；关，表示不看均线。</div>
-            <div>笔数：这段时间里做完的买卖次数。</div>
-            <div>胜率：这些买卖里，卖出价高于买入价的占比。</div>
+            <div>胜率：卖出价高于买入价的占比。</div>
             <div>平均每笔：每一笔卖掉时赚或亏的百分比，再取平均。不是留存率。</div>
             <div>一共赚亏：这些买卖前后接起来，整段时间总共赚或亏的百分比。也不是留存率。</div>
           </div>
