@@ -47,6 +47,7 @@ export default function Home() {
   const targetRsi = field(order, "target_rsi")
   const pct = field(order, "pct_from_close")
   const note = field(order, "note")
+  const results = field(bt, "results")
 
   return (
     <div style={{ fontFamily: "system-ui", maxWidth: 1100, margin: "0 auto", padding: 24 }}>
@@ -81,13 +82,13 @@ export default function Home() {
         </div>
       )}
 
-      {bt && bt.results && (
+      {results && (
         <div>
           <h2>Backtest — top combos by win rate ({field(bt, "period")}, {field(bt, "n_bars")} bars)</h2>
           <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
             <thead><tr>{["rsi_buy","rsi_buy2","rsi_sell","macd_exit","trend_filter","trades","win_rate %","avg ret %","total ret %"].map(h => <th key={h} style={{ borderBottom: "2px solid #111", textAlign: "left", padding: 6 }}>{h}</th>)}</tr></thead>
             <tbody>
-              {bt.results.map((r, i) => (
+              {results.map((r, i) => (
                 <tr key={i} style={{ background: i === 0 ? "#dcfce7" : "#fff" }}>
                   <td style={{ padding: 6 }}>{field(r, "rsi_buy")}</td><td style={{ padding: 6 }}>{field(r, "rsi_buy2")}</td><td style={{ padding: 6 }}>{field(r, "rsi_sell")}</td>
                   <td style={{ padding: 6 }}>{String(field(r, "macd_exit"))}</td><td style={{ padding: 6 }}>{String(field(r, "trend_filter"))}</td>
