@@ -174,29 +174,65 @@ def signals(symbol: str):
         "bb_low 布林下轨": num(last.bb_low), "position_tier 建议仓位": pos,
     }
 
+def _rsi_per_percent(df):
+    """Median RSI points gained when price rises 1%. Positive in a normal market."""
+    ret = df["close"].pct_change()
+    drsi = df["rsi"].diff()
+    sens = (drsi / (ret * 100)).replace([np.inf, -np.inf], np.nan).dropna()
+    sens = sens[ret.reindex(sens.index).abs() > 0.001]
+    if sens.empty:
+        return 2.0
+    v = float(sens.tail(15).median())
+    return v if np.isfinite(v) and v > 0.2 else 2.0
+
+def _rung(close, price, action):
+    return {
+        "price 价格": num(price, 3),
+        "pct_from_close 距收盘百分比": num((price / close - 1) * 100, 2),
+        "action 动作": action,
+    }
+
 @app.get("/api/orders/suggest", summary="限价单建议 / Limit order suggestion")
-def order_suggest(symbol: str = "etf_510500", target_rsi: float = 30.0):
-    df = sanitize(q("SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date DESC LIMIT 20", [symbol]))
-    if len(df) < 3:
+def order_suggest(symbol: str = "etf_510500"):
+    """只给现价或更低的买入限价。RSI 已经低于 30 时现价就买，再低继续买，不等弹回 20/25。"""
+    df = sanitize(q(
+        "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date DESC LIMIT 60",
+        [symbol],
+    ))
+    if len(df) < 16:
         return {"error": "not enough data 数据不足"}
     df = df.iloc[::-1].reset_index(drop=True)
     df = add_indicators(df)
-    last, prev = df.iloc[-1], df.iloc[-2]
-    if pd.isna(last.rsi):
+    last = df.iloc[-1]
+    if pd.isna(last.rsi) or pd.isna(last.close) or last.close <= 0:
         return {"error": "rsi not ready RSI未就绪"}
-    pct_move = (last.close - prev.close) / prev.close
-    rsi_move = last.rsi - prev.rsi if pd.notna(prev.rsi) else 0
-    sens = rsi_move / pct_move if pct_move != 0 else -50
-    pct_needed = (target_rsi - last.rsi) / sens if sens != 0 else 0
-    limit_price = last.close * (1 + pct_needed)
+    close = float(last.close)
+    rsi_now = float(last.rsi)
+    sens = _rsi_per_percent(df)
+    ladder = []
+    if rsi_now <= 30:
+        ladder.append(_rung(close, close, "现价买入。RSI 已低于 30，这就是买点"))
+        for pct, label in ((0.03, "再低 3%，继续买"), (0.06, "再低 6%，继续买"), (0.09, "再低 9%，继续买")):
+            ladder.append(_rung(close, close * (1 - pct), label))
+        if pd.notna(last.bb_low) and float(last.bb_low) < close * 0.995:
+            ladder.append(_rung(close, float(last.bb_low), "布林下轨，再买一笔"))
+        note = "已经在超卖区。限价只挂现价或更低，越低越买。不要等 RSI 弹回 20 或 25 再买。非投资建议。"
+    else:
+        for target, label in ((30, "跌到 RSI 30，第一笔"), (20, "再跌到 RSI 20，加仓")):
+            pct = (target - rsi_now) / sens / 100.0
+            px = close * (1 + pct)
+            if px < close * 0.999:
+                ladder.append(_rung(close, px, label))
+        note = "还没到买区。下面的价都在现价下方，是按近期涨跌估的，不是等反弹。非投资建议。"
+    ladder.sort(key=lambda x: -x["price 价格"])
     return {
         "symbol": symbol,
-        "today_close 今日收盘价": num(last.close),
-        "today_rsi 今日RSI": num(last.rsi, 1),
-        "target_rsi 目标RSI": target_rsi,
-        "suggested_limit_price 建议限价": num(max(limit_price, 0.01)),
-        "pct_from_close 距收盘百分比": num(pct_needed * 100, 2),
-        "note 说明": "线性近似，仅供参考，开盘时请复查 / Linear approx, for reference only. Not financial advice 非投资建议.",
+        "as_of 日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
+        "today_close 今日收盘价": num(close),
+        "today_rsi 今日RSI": num(rsi_now, 1),
+        "already_in_buy_zone 已在买区": bool(rsi_now <= 30),
+        "ladder 分批限价": ladder,
+        "note 说明": note,
     }
 
 @app.get("/api/backtest", summary="回测胜率表 / Backtest win-rate table")
