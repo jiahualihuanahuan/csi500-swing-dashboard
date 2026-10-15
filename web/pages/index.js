@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import PriceChart from "../components/PriceChart"
 
 const API = ""
+const RANGES = [
+  { id: "6m", label: "6个月", days: 183 },
+  { id: "1y", label: "1年", days: 365 },
+  { id: "3y", label: "3年", days: 365 * 3 },
+  { id: "5y", label: "5年", days: 365 * 5 },
+  { id: "all", label: "全部", days: null },
+]
 
 function field(obj, name) {
   if (!obj) return undefined
@@ -9,19 +17,31 @@ function field(obj, name) {
   return key ? obj[key] : undefined
 }
 
+function sliceRange(rows, days) {
+  if (!days || !rows?.length) return rows || []
+  const end = new Date(rows[rows.length - 1].date + "T00:00:00")
+  const start = new Date(end)
+  start.setDate(start.getDate() - days)
+  const iso = start.toISOString().slice(0, 10)
+  return rows.filter(r => r.date >= iso)
+}
+
 export default function Home() {
   const [sig, setSig] = useState(null)
   const [bt, setBt] = useState(null)
   const [order, setOrder] = useState(null)
+  const [bars, setBars] = useState(null)
   const [err, setErr] = useState(null)
   const [sym, setSym] = useState("etf_510500")
+  const [range, setRange] = useState("1y")
 
   useEffect(() => {
     let cancelled = false
-    setSig(null); setBt(null); setOrder(null); setErr(null)
+    setSig(null); setBt(null); setOrder(null); setBars(null); setErr(null)
     ;(async () => {
       const jobs = [
         ["signals", `${API}/api/signals/${sym}`, setSig],
+        ["chart", `${API}/api/chart/${sym}`, setBars],
         ["backtest", `${API}/api/backtest?symbol=${sym}`, setBt],
         ["orders", `${API}/api/orders/suggest?symbol=${sym}`, setOrder],
       ]
@@ -42,6 +62,9 @@ export default function Home() {
     })()
     return () => { cancelled = true }
   }, [sym])
+
+  const days = RANGES.find(r => r.id === range)?.days
+  const view = useMemo(() => sliceRange(Array.isArray(bars) ? bars : [], days), [bars, days])
 
   const limit = field(order, "suggested_limit_price")
   const todayClose = field(order, "today_close")
@@ -77,6 +100,28 @@ export default function Home() {
           ))}
         </div>
       )}
+
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+          <h2 style={{ margin: "0 0 8px" }}>日线</h2>
+          <div>
+            {RANGES.map(r => (
+              <button key={r.id} onClick={() => setRange(r.id)}
+                style={{ marginLeft: 6, padding: "4px 10px", borderRadius: 6, border: range === r.id ? "2px solid #2563eb" : "1px solid #ccc", background: range === r.id ? "#dbeafe" : "#fff" }}>{r.label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 14px", fontSize: 12, color: "#4b5563", marginBottom: 8 }}>
+          <span><b style={{ color: "#ef4444" }}>MA5</b></span>
+          <span><b style={{ color: "#f59e0b" }}>MA10</b></span>
+          <span><b style={{ color: "#ca8a04" }}>MA20</b> 布林中轨</span>
+          <span><b style={{ color: "#2563eb" }}>MA50</b> 趋势过滤</span>
+          <span><b style={{ color: "#7c3aed" }}>MA200</b></span>
+          <span style={{ color: "#94a3b8" }}>虚线 布林上下轨</span>
+          <span>下方副图：成交量 · MACD · RSI · KDJ · Z-score(20日)</span>
+        </div>
+        {view.length > 0 ? <PriceChart rows={view} /> : <div style={{ padding: 24, color: "#6b7280" }}>图加载中…</div>}
+      </div>
 
       {order && !order.error && limit != null && (
         <div style={{ border: "1px solid #fca5a5", borderRadius: 8, padding: 16, marginBottom: 24, background: "#fef2f2" }}>
