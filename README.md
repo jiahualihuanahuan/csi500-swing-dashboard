@@ -5,12 +5,12 @@ CSI 500 index & ETF swing-trading dashboard.
 
 ## 技术栈 / Stack
 
-- **数据抓取 Data fetch**: Python + akshare（指数+ETF日线，限速 1 次/秒 rate-limited to 1 req/s）
-- **存储 Storage**: PostgreSQL（快速SQL，按 symbol/date 建索引 indexed on symbol/date）
+- **数据抓取 Data fetch**: ETF 用 yfinance（`510500.SS` / `159922.SZ`，一次拉 2015 年以来，约 1 秒）。中证500指数 Yahoo 只给 1 日/5 日，改走新浪日线一次请求（约 2 秒，回到 2005 年）。不再用东财 akshare。
+- **存储 Storage**: PostgreSQL（按 symbol/date 主键 indexed on symbol/date）
 - **API**: FastAPI（信号 signals、仓位 positions、回测 backtest、限价单建议 limit-order suggestions）
-- **前端 Frontend**: Next.js + lightweight-charts（K线图 + RSI/KDJ/MACD）
-- **回测 Backtest**: 网格搜索 RSI/KDJ/布林带触发组合 grid search over trigger combos，胜率表 win-rate table
-- **部署 Deploy**: Docker Compose（可选 Ollama 新闻摘要 sidecar，默认关闭 off by default）
+- **前端 Frontend**: Next.js
+- **回测 Backtest**: 网格搜索 RSI 买卖线、MACD 出场、MA50 趋势过滤，按胜率排序
+- **部署 Deploy**: Docker Compose（可选 Ollama 新闻摘要 sidecar，默认关闭）
 
 ## 指标说明 / Indicator Guide
 
@@ -32,22 +32,23 @@ docker compose up -d --build
 - 仪表盘 Dashboard: http://localhost:3333
 - API 文档 API docs: http://localhost:8000/docs
 
+首次抓取三个品种大约几秒。之后每分钟只补最近 45 天。
+
 ## 仓位状态机 / Position state machine
 
-四个档位 Four tiers: 满仓 full / 半仓 half / 轻仓 light / 空仓 flat。
-RSI < 30 买入一半（half），RSI < 20 补到七成（to 70%），RSI > 70 或 MACD 柱状图翻转时卖出 exits。
+RSI < 30 买入一半（half 0.5），RSI < 20 补到七成（0.7），RSI > 70 或 MACD 柱由正翻负时卖出。
+价格跌破 MA50 则趋势出场，且不开新仓。这不是满仓/轻仓四档，实际只有空仓、半仓、补仓三种。
 
 ## 回测 / Backtest
 
-`GET /api/backtest?symbol=etf_510500&start=2022-01-01&end=2026-10-15`
-返回按胜率排序的参数组合对比表 comparison table of trigger parameter sets sorted by win rate。
+`GET /api/backtest?symbol=etf_510500&start=2022-01-01`
+`end` 省略则用今天。返回按胜率排序的参数组合对比表。
 
 ## 限价单助手 / Limit-order helper
 
 `GET /api/orders/suggest?symbol=etf_510500`
-根据今日收盘价和RSI，估算RSI达到下一个买入触发点（如30）时的价格，可直接用于挂限价单。
-Computes the price at which RSI would hit the next buy trigger given today's close.
+根据今日收盘价和RSI，线性估算RSI达到下一个买入触发点（如30）时的价格。仅供参考，非投资建议。
 
 ## 新闻摘要（可选）/ News digest (optional)
 
-在 `.env` 中设置 `OLLAMA_URL` 启用。Sidecar 每日总结中文财经 headlines，供服务器上的 9B Qwen 模型阅读。非必需 Not required.
+在 `.env` 中设置 `OLLAMA_URL` 启用。Sidecar 每日总结中文财经 headlines。非必需 Not required.

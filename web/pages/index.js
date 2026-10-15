@@ -20,23 +20,25 @@ export default function Home() {
     let cancelled = false
     setSig(null); setBt(null); setOrder(null); setErr(null)
     ;(async () => {
-      try {
-        const [sRes, bRes, oRes] = await Promise.all([
-          fetch(`${API}/api/signals/${sym}`),
-          fetch(`${API}/api/backtest?symbol=${sym}`),
-          fetch(`${API}/api/orders/suggest?symbol=${sym}`),
-        ])
-        if (!sRes.ok || !bRes.ok || !oRes.ok) {
-          throw new Error(`API ${sRes.status}/${bRes.status}/${oRes.status}`)
+      const jobs = [
+        ["signals", `${API}/api/signals/${sym}`, setSig],
+        ["backtest", `${API}/api/backtest?symbol=${sym}`, setBt],
+        ["orders", `${API}/api/orders/suggest?symbol=${sym}`, setOrder],
+      ]
+      const errs = []
+      await Promise.all(jobs.map(async ([name, url, set]) => {
+        try {
+          const r = await fetch(url)
+          const body = await r.json().catch(() => null)
+          if (!r.ok) throw new Error(`${name} ${r.status}`)
+          if (cancelled) return
+          set(body)
+          if (body?.error) errs.push(`${name}: ${body.error}`)
+        } catch (e) {
+          errs.push(e.message || String(e))
         }
-        const [s, b, o] = await Promise.all([sRes.json(), bRes.json(), oRes.json()])
-        if (cancelled) return
-        setSig(s); setBt(b); setOrder(o)
-        const msgs = [s?.error, b?.error, o?.error].filter(Boolean)
-        if (msgs.length) setErr(msgs.join(" · "))
-      } catch (e) {
-        if (!cancelled) setErr(e.message || String(e))
-      }
+      }))
+      if (!cancelled && errs.length) setErr(errs.join(" · "))
     })()
     return () => { cancelled = true }
   }, [sym])
