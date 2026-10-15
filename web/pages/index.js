@@ -80,10 +80,10 @@ export default function Home() {
         try {
           const r = await fetch(url)
           const body = await r.json().catch(() => null)
-          if (!r.ok) throw new Error(`${name} ${r.status}`)
+          if (!r.ok) throw new Error(name + " " + r.status)
           if (cancelled) return
           set(body)
-          if (body?.error) errs.push(`${name}：${String(body.error).replace(/no data |无数据.*/, "还没有数据").replace(/only (\d+) bars /, "只有$1根K线")}`)}
+          if (body && body.error) errs.push(name + "：" + body.error)
         } catch (e) {
           errs.push(e.message || String(e))
         }
