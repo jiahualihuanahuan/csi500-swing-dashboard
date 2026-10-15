@@ -98,8 +98,36 @@ def add_indicators(df):
     df["k"], df["d"], df["j"] = kdj(df)
     df["macd"], df["signal"], df["hist"] = macd(df["close"])
     df["bb_low"], df["bb_mid"], df["bb_up"] = bollinger(df["close"])
-    df["ma50"] = df["close"].rolling(50).mean()
+    for n in (5, 10, 20, 50, 200):
+        df[f"ma{n}"] = df["close"].rolling(n).mean()
+    std20 = df["close"].rolling(20).std()
+    df["zscore"] = (df["close"] - df["ma20"]) / std20.replace(0, np.nan)
     return df
+
+CHART_FIELDS = (
+    "open", "high", "low", "close", "volume",
+    "ma5", "ma10", "ma20", "ma50", "ma200", "bb_up", "bb_low",
+    "rsi", "k", "d", "j", "macd", "signal", "hist", "zscore",
+)
+
+@app.get("/api/chart/{symbol}", summary="日线加指标 / Daily bars with indicators")
+def chart(symbol: str):
+    """全历史计算后返回。前端再按 6个月/年截取，避免窗口左边指标是空的。"""
+    df = sanitize(q(
+        "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date",
+        [symbol],
+    ))
+    if df.empty:
+        return {"error": "no data 无数据"}
+    df = add_indicators(df)
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    nd = {"volume": 0, "rsi": 1, "k": 1, "d": 1, "j": 1, "macd": 4, "signal": 4, "hist": 4, "zscore": 2}
+    out = []
+    for rec in df[["date", *CHART_FIELDS]].to_dict(orient="records"):
+        for f in CHART_FIELDS:
+            rec[f] = num(rec[f], nd.get(f, 3))
+        out.append(rec)
+    return out
 
 def simulate(df, rsi_buy=30, rsi_buy2=20, rsi_sell=70, macd_exit=True, trend_filter=True):
     df = add_indicators(df)
