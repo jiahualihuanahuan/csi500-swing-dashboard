@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """CSI 500 daily bars.
 
-ETFs come from Yahoo Finance (one request, years of history).
-The CSI 500 index (000905.SS) is listed on Yahoo but only offers 1d/5d,
-so the index uses Sina's daily kline, also one request back to 2005.
-两只 ETF 走 Yahoo；中证500指数 Yahoo 不给长历史，改走新浪一次性日线。
+ETFs come from Yahoo Finance, unadjusted so limit prices match the exchange.
+The CSI 500 index (000905.SS) only offers 1d/5d on Yahoo, so it uses Sina.
+两只 ETF 走 Yahoo 未复权价，限价才能对上交易所报价；指数走新浪。
 """
 import json, os, time, urllib.request, datetime as dt
 import pandas as pd
@@ -14,7 +13,6 @@ from psycopg2.extras import execute_values
 
 DB = os.environ["DATABASE_URL"]
 INTERVAL = int(os.environ.get("FETCH_INTERVAL_SEC", "60"))
-# name -> (yahoo ticker or None, sina symbol)
 SOURCES = {
     "csi500_index": (None, "sh000905"),
     "etf_510500": ("510500.SS", "sh510500"),
@@ -71,17 +69,23 @@ def _ohlcv(df):
     df["date"] = pd.to_datetime(df["date"]).dt.date
     for col in ("open", "high", "low", "close", "volume"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    # The newest Yahoo bar is often an unfinished session with a null close.
-    # Keeping it makes RSI NaN and the signals endpoint returns HTTP 500.
+    # Yahoo sometimes prints high/low for the newest session and leaves close blank.
+    # Fill close from the traded range instead of dropping the day.
+    gap = df["close"].isna() & df["high"].notna() & df["low"].notna()
+    df.loc[gap, "close"] = (df.loc[gap, "high"] + df.loc[gap, "low"]) / 2
+    df.loc[gap & df["open"].isna(), "open"] = df.loc[gap, "close"]
     return df[["date", "open", "high", "low", "close", "volume"]].dropna(subset=["open", "high", "low", "close"])
 
 def fetch_yahoo(ticker, start):
-    df = yf.download(ticker, start=start, auto_adjust=True, progress=False, threads=False)
+    # Unadjusted. auto_adjust=True wiped the latest bar when its close was missing.
+    df = yf.download(ticker, start=start, auto_adjust=False, progress=False, threads=False)
     if df is None or df.empty:
         raise RuntimeError(f"yfinance empty {ticker}")
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df = df.reset_index().rename(columns=str.lower)
+    if "adj close" in df.columns:
+        df = df.drop(columns=["adj close"])
     return _ohlcv(df)
 
 def fetch_sina(symbol, datalen):
