@@ -23,15 +23,6 @@ CREATE TABLE IF NOT EXISTS bars (
 );
 """
 
-# 相对强弱越低，建议拿到的仓位越大。不因为跌破50日均线就改成空仓。
-# 高于25：空仓。到25：一成。到20：三成。到15：四成。低于10：六成。
-POSITION_LADDER = (
-    (10, 0.60, "六成（60%）"),
-    (15, 0.40, "四成（40%）"),
-    (20, 0.30, "三成（30%）"),
-    (25, 0.10, "一成（10%）"),
-)
-
 @app.on_event("startup")
 def init_db():
     c = psycopg2.connect(DB)
@@ -64,13 +55,68 @@ def num(x, nd=3):
         return None
     return round(v, nd)
 
-def position_for_rsi(rsi):
-    if rsi is None or not np.isfinite(rsi):
-        return 0.0, "算不出来"
-    for ceiling, weight, label in POSITION_LADDER:
-        if rsi <= ceiling:
-            return weight, label
-    return 0.0, "空仓"
+def _buy_target(rsi):
+    """越低买得越多。高于25不加仓，也不因此清仓。"""
+    if rsi <= 10:
+        return 0.60
+    if rsi <= 15:
+        return 0.40
+    if rsi <= 20:
+        return 0.30
+    if rsi <= 25:
+        return 0.10
+    return 0.0
+
+def _keep_ratio(rsi):
+    """50以下全留。50到70慢慢减。高于70空仓。"""
+    if rsi <= 50:
+        return 1.0
+    if rsi <= 55:
+        return 0.8
+    if rsi <= 60:
+        return 0.5
+    if rsi <= 65:
+        return 0.2
+    if rsi <= 70:
+        return 0.1
+    return 0.0
+
+def _pct_label(pos):
+    for value, name in ((0.10, "一成（10%）"), (0.30, "三成（30%）"), (0.40, "四成（40%）"), (0.60, "六成（60%）")):
+        if abs(pos - value) < 0.015:
+            return name
+    return f"{round(pos * 100)}%"
+
+def position_now(df):
+    """从上一次高于70之后算。跌到过哪一档就拿到哪一档，50以下不减。"""
+    base = 0.0
+    pos = 0.0
+    last_rsi = None
+    for raw in df["rsi"]:
+        if pd.isna(raw):
+            continue
+        last_rsi = float(raw)
+        add = _buy_target(last_rsi)
+        if add > base:
+            base = add
+        keep = _keep_ratio(last_rsi)
+        if keep == 0.0:
+            base = 0.0
+            pos = 0.0
+        elif keep < 1.0:
+            pos = base * keep
+        else:
+            pos = base
+    if last_rsi is None:
+        return 0.0, "算不出来", "空仓"
+    if pos <= 0.005:
+        return 0.0, "空仓", "空仓"
+    label = _pct_label(pos)
+    if last_rsi > 50:
+        return pos, label + "，正在减", "减仓"
+    if last_rsi <= 25:
+        return pos, label, "买入"
+    return pos, label, "持有"
 
 @app.get("/health")
 def health():
@@ -168,19 +214,28 @@ def simulate(df, rsi_buy=30, rsi_buy2=20, rsi_sell=70, macd_exit=True, trend_fil
         trades.append((df.iloc[-1].date, entry, df.iloc[-1].close, pos, "open 未平仓"))
     return trades
 
+def _load(symbol):
+    df = sanitize(q(
+        "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date",
+        [symbol],
+    ))
+    if df.empty:
+        return df
+    return add_indicators(df)
+
 @app.get("/api/signals/{symbol}", summary="最新信号")
 def signals(symbol: str):
-    df = sanitize(q("SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date", [symbol]))
+    df = _load(symbol)
     if df.empty:
         return {"error": "还没有数据"}
-    df = add_indicators(df)
     last = df.iloc[-1]
     rsi_now = None if pd.isna(last.rsi) else float(last.rsi)
-    _, label = position_for_rsi(rsi_now)
+    _, label, _phase = position_now(df)
     ma = num(last.ma50)
     ma_txt = None
     if ma is not None:
-        ma_txt = f"{ma}，价格在它{'下' if last.close < last.ma50 else '上'}面"
+        side = "下" if last.close < last.ma50 else "上"
+        ma_txt = f"{ma}，价格在它{side}面"
     rsi_txt = None if rsi_now is None else f"{num(rsi_now, 1)}，越低越该买"
     return {
         "日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
@@ -210,36 +265,38 @@ def _rung(close, price, action):
 
 @app.get("/api/orders/suggest", summary="限价单建议")
 def order_suggest(symbol: str = "etf_510500"):
-    df = sanitize(q(
-        "SELECT trade_date AS date, open, high, low, close, volume FROM bars WHERE symbol=%s ORDER BY trade_date DESC LIMIT 60",
-        [symbol],
-    ))
+    df = _load(symbol)
     if len(df) < 16:
         return {"error": "数据不够"}
-    df = df.iloc[::-1].reset_index(drop=True)
-    df = add_indicators(df)
     last = df.iloc[-1]
     if pd.isna(last.rsi) or pd.isna(last.close) or last.close <= 0:
         return {"error": "相对强弱还没算出来"}
     close = float(last.close)
     rsi_now = float(last.rsi)
-    _, label = position_for_rsi(rsi_now)
+    _weight, label, phase = position_now(df)
     sens = _rsi_per_percent(df)
     ladder = []
-    if rsi_now <= 25:
-        ladder.append(_rung(close, close, f"现价买入，目标拿到{label}"))
-        for pct, text in ((0.03, "再低3%，继续买"), (0.06, "再低6%，继续买"), (0.09, "再低9%，继续买")):
-            ladder.append(_rung(close, close * (1 - pct), text))
-        if pd.notna(last.bb_low) and float(last.bb_low) < close * 0.995:
-            ladder.append(_rung(close, float(last.bb_low), "布林下轨，再买一笔"))
-        note = f"相对强弱 {num(rsi_now, 1)}，建议仓位{label}。跌破50日均线也不改成空仓。越低仓位越大：25是一成，20是三成，15是四成，10以下是六成。非投资建议。"
-    else:
+    if phase == "减仓":
+        note = f"相对强弱 {num(rsi_now, 1)}，已经高于50，建议仓位{label}。高于70才空仓。这一段不加仓。非投资建议。"
+    elif phase == "空仓" and rsi_now > 70:
+        note = "相对强弱已经高于70，按规则是空仓。非投资建议。"
+    elif phase == "空仓":
         for target, text in ((25, "跌到相对强弱25，先买一成"), (20, "再跌到20，加到三成")):
             pct = (target - rsi_now) / sens / 100.0
             px = close * (1 + pct)
             if px < close * 0.999:
                 ladder.append(_rung(close, px, text))
-        note = "还没到买区。下面的价都在现价下方，不是等它涨回去。非投资建议。"
+        note = "这次还没跌到25，所以还是空仓。不是因为高于25就该卖。下面的价都在现价下方。非投资建议。"
+    else:
+        ladder.append(_rung(close, close, f"现价可以买，目标拿到{label}"))
+        for pct, text in ((0.03, "再低3%，继续买"), (0.06, "再低6%，继续买"), (0.09, "再低9%，继续买")):
+            ladder.append(_rung(close, close * (1 - pct), text))
+        if pd.notna(last.bb_low) and float(last.bb_low) < close * 0.995:
+            ladder.append(_rung(close, float(last.bb_low), "布林下轨，再买一笔"))
+        if phase == "持有":
+            note = f"相对强弱 {num(rsi_now, 1)}，建议仓位{label}。高于25也先拿着，回到50以下都不卖。高于50才开始减，高于70才空仓。非投资建议。"
+        else:
+            note = f"相对强弱 {num(rsi_now, 1)}，建议仓位{label}。回到50以下都不卖。高于50才开始减，高于70才空仓。非投资建议。"
     ladder.sort(key=lambda x: -x["price 价格"])
     return {
         "symbol": symbol,
@@ -247,7 +304,8 @@ def order_suggest(symbol: str = "etf_510500"):
         "today_close 今日收盘价": num(close),
         "today_rsi 今日RSI": num(rsi_now, 1),
         "建议仓位": label,
-        "already_in_buy_zone 已在买区": bool(rsi_now <= 25),
+        "phase 阶段": phase,
+        "already_in_buy_zone 已在买区": phase == "买入",
         "ladder 分批限价": ladder,
         "note 说明": note,
     }
