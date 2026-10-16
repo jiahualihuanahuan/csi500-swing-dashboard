@@ -90,13 +90,14 @@ export default function Home() {
   const todayClose = field(order, "today_close")
   const todayRsi = field(order, "today_rsi")
   const asOf = field(order, "as_of")
-  const inZone = field(order, "already_in_buy_zone")
+  const phase = field(order, "phase") || ""
   const ladder = field(order, "ladder") || []
   const note = field(order, "note")
   const results = field(bt, "results")
   const cards = sig && !sig.error
     ? Object.entries(sig).filter(([k, v]) => v != null && v !== "" && !k.startsWith("_"))
     : []
+  const boxTitle = phase === "减仓" ? "减仓" : phase === "持有" ? "先拿着" : phase === "空仓" ? "空仓" : "分批买入"
 
   return (
     <div style={{ fontFamily: "system-ui", maxWidth: 1180, margin: "0 auto", padding: 24 }}>
@@ -125,7 +126,7 @@ export default function Home() {
             ))}
           </div>
           <div style={{ color: "#4b5563", fontSize: 13, lineHeight: 1.6, marginTop: 8 }}>
-            相对强弱是 0 到 100，越低越便宜。仓位按这个数加，不因为跌破 50 日均线就改成空仓。高于 25 空仓；到 25 买一成；到 20 拿到三成；到 15 拿到四成；低于 10 拿到六成。
+            越低买得越多：跌到25买一成，到20拿到三成，到15拿到四成，低于10拿到六成。买进之后，回到50以下都不卖，高于25也不会清成空仓。高于50开始减：50到55留八成，55到60留一半，60到65留两成，65到70留一成。高于70才空仓。
           </div>
         </div>
       )}
@@ -145,22 +146,23 @@ export default function Home() {
 
       {order && !order.error && (
         <div style={{ border: "1px solid #86efac", borderRadius: 8, padding: 16, marginBottom: 24, background: "#f0fdf4" }}>
-          <b>分批买入</b>
+          <b>{boxTitle}</b>
           <div style={{ margin: "6px 0 10px" }}>
             截至 {asOf} 收盘 <b>{todayClose}</b>，相对强弱 <b>{todayRsi}</b>。
-            {inZone ? " 已经在买区：现价可以买，更低就继续买。" : " 还没到买区：只挂现价下方。"}
           </div>
-          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14 }}>
-            <tbody>
-              {ladder.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ padding: "4px 12px 4px 0", fontWeight: 700 }}>{field(r, "price")}</td>
-                  <td style={{ padding: 4, color: "#6b7280" }}>{field(r, "pct_from_close")}%</td>
-                  <td style={{ padding: 4 }}>{field(r, "action")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {ladder.length > 0 && (
+            <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 14 }}>
+              <tbody>
+                {ladder.map((r, i) => (
+                  <tr key={i}>
+                    <td style={{ padding: "4px 12px 4px 0", fontWeight: 700 }}>{field(r, "price")}</td>
+                    <td style={{ padding: 4, color: "#6b7280" }}>{field(r, "pct_from_close")}%</td>
+                    <td style={{ padding: 4 }}>{field(r, "action")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <div style={{ marginTop: 8, color: "#4b5563", fontSize: 13 }}>{note}</div>
         </div>
       )}
