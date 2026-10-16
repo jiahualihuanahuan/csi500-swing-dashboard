@@ -22,13 +22,39 @@ function lineData(rows, key) {
   return out
 }
 
+function paint(bag, rows) {
+  if (!bag || !rows?.length) return
+  const { series } = bag
+  series.candle.setData(rows.map(r => ({ time: r.date, open: r.open, high: r.high, low: r.low, close: r.close })))
+  for (const key of ["ma5", "ma10", "ma20", "ma50", "ma200", "bb_up", "bb_low", "macd", "signal", "rsi", "k", "d", "j", "zscore"]) {
+    series[key].setData(lineData(rows, key))
+  }
+  series.volume.setData(rows.map(r => ({
+    time: r.date,
+    value: r.volume || 0,
+    color: r.close >= r.open ? "rgba(220,38,38,0.45)" : "rgba(22,163,74,0.45)",
+  })))
+  series.hist.setData(rows.filter(r => r.hist != null).map(r => ({
+    time: r.date,
+    value: r.hist,
+    color: r.hist >= 0 ? "rgba(220,38,38,0.75)" : "rgba(22,163,74,0.75)",
+  })))
+  if (!bag.fitted) {
+    bag.chart.timeScale().fitContent()
+    bag.fitted = true
+  }
+}
+
 export default function PriceChart({ rows }) {
   const ref = useRef(null)
+  const bagRef = useRef(null)
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
 
   useEffect(() => {
-    if (!ref.current || !rows?.length) return
-    let chart
+    if (!ref.current) return
     let dead = false
+    let chart
     ;(async () => {
       const lc = await import("lightweight-charts")
       if (dead || !ref.current) return
@@ -45,17 +71,16 @@ export default function PriceChart({ rows }) {
         timeScale: { borderColor: "#e5e7eb" },
       })
 
+      const series = {}
       const addLine = (pane, key, color, extra = {}) => {
-        const s = chart.addSeries(lc.LineSeries, { color, lineWidth: 1, ...OVERLAY, ...extra }, pane)
-        s.setData(lineData(rows, key))
-        return s
+        series[key] = chart.addSeries(lc.LineSeries, { color, lineWidth: 1, ...OVERLAY, ...extra }, pane)
       }
 
-      chart.addSeries(lc.CandlestickSeries, {
+      series.candle = chart.addSeries(lc.CandlestickSeries, {
         upColor: UP, downColor: DOWN,
         borderUpColor: UP, borderDownColor: DOWN,
         wickUpColor: UP, wickDownColor: DOWN,
-      }, 0).setData(rows.map(r => ({ time: r.date, open: r.open, high: r.high, low: r.low, close: r.close })))
+      }, 0)
 
       addLine(0, "ma5", "#ef4444")
       addLine(0, "ma10", "#f59e0b")
@@ -65,35 +90,25 @@ export default function PriceChart({ rows }) {
       addLine(0, "bb_up", "#94a3b8", { lineStyle: 2 })
       addLine(0, "bb_low", "#94a3b8", { lineStyle: 2 })
 
-      chart.addSeries(lc.HistogramSeries, {
+      series.volume = chart.addSeries(lc.HistogramSeries, {
         priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false,
-      }, 1).setData(rows.map(r => ({
-        time: r.date,
-        value: r.volume || 0,
-        color: r.close >= r.open ? "rgba(220,38,38,0.45)" : "rgba(22,163,74,0.45)",
-      })))
+      }, 1)
 
-      chart.addSeries(lc.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2).setData(
-        rows.filter(r => r.hist != null).map(r => ({
-          time: r.date,
-          value: r.hist,
-          color: r.hist >= 0 ? "rgba(220,38,38,0.75)" : "rgba(22,163,74,0.75)",
-        }))
-      )
+      series.hist = chart.addSeries(lc.HistogramSeries, { priceLineVisible: false, lastValueVisible: false }, 2)
       addLine(2, "macd", "#2563eb")
       addLine(2, "signal", "#f59e0b")
 
-      const rsi = addLine(3, "rsi", "#7c3aed", { lineWidth: 2, lastValueVisible: true })
-      rsi.createPriceLine({ price: 70, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "70" })
-      rsi.createPriceLine({ price: 30, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "30" })
+      addLine(3, "rsi", "#7c3aed", { lineWidth: 2, lastValueVisible: true })
+      series.rsi.createPriceLine({ price: 70, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "70" })
+      series.rsi.createPriceLine({ price: 30, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "30" })
 
       addLine(4, "k", "#2563eb")
       addLine(4, "d", "#f59e0b")
       addLine(4, "j", "#db2777")
 
-      const z = addLine(5, "zscore", "#0f766e", { lineWidth: 2, lastValueVisible: true })
+      addLine(5, "zscore", "#0f766e", { lineWidth: 2, lastValueVisible: true })
       for (const level of [2, 0, -2]) {
-        z.createPriceLine({ price: level, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(level) })
+        series.zscore.createPriceLine({ price: level, color: "#9ca3af", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(level) })
       }
 
       chart.panes().forEach((pane, i) => {
@@ -106,12 +121,20 @@ export default function PriceChart({ rows }) {
           })
         }
       })
-      chart.timeScale().fitContent()
+
+      const bag = { chart, series, fitted: false }
+      bagRef.current = bag
+      paint(bag, rowsRef.current)
     })()
     return () => {
       dead = true
       chart?.remove()
+      bagRef.current = null
     }
+  }, [])
+
+  useEffect(() => {
+    paint(bagRef.current, rows)
   }, [rows])
 
   return (

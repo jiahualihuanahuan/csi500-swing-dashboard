@@ -41,6 +41,20 @@ function sliceRange(rows, days) {
   return rows.filter(r => r.date >= iso)
 }
 
+function sameBars(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+  const x = a[a.length - 1]
+  const y = b[b.length - 1]
+  if (!x || !y) return false
+  return x.date === y.date && x.open === y.open && x.high === y.high && x.low === y.low && x.close === y.close && x.volume === y.volume
+}
+
+function clock(d) {
+  if (!d) return ""
+  const p = (n) => String(n).padStart(2, "0")
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())
+}
+
 function onOff(v) {
   if (v === true || v === "true") return "开"
   if (v === false || v === "false") return "关"
@@ -53,23 +67,33 @@ export default function Home() {
   const [order, setOrder] = useState(null)
   const [bars, setBars] = useState(null)
   const [err, setErr] = useState(null)
+  const [updated, setUpdated] = useState(null)
   const [sym, setSym] = useState("etf_510500")
   const [range, setRange] = useState("1y")
 
   useEffect(() => {
     let cancelled = false
-    setSig(null); setBt(null); setOrder(null); setBars(null); setErr(null)
-    ;(async () => {
+    let backtestAt = 0
+    const load = async (first) => {
+      if (first) {
+        setSig(null); setBt(null); setOrder(null); setBars(null); setErr(null)
+      }
       const jobs = [
         ["信号", `${API}/api/signals/${sym}`, setSig],
-        ["图", `${API}/api/chart/${sym}`, setBars],
-        ["回测", `${API}/api/backtest?symbol=${sym}`, setBt],
+        ["图", `${API}/api/chart/${sym}`, (body) => {
+          setBars(prev => sameBars(prev, body) ? prev : body)
+        }],
         ["限价", `${API}/api/orders/suggest?symbol=${sym}`, setOrder],
       ]
+      const now = Date.now()
+      if (first || now - backtestAt > 5 * 60 * 1000) {
+        backtestAt = now
+        jobs.push(["回测", `${API}/api/backtest?symbol=${sym}`, setBt])
+      }
       const errs = []
       await Promise.all(jobs.map(async ([name, url, set]) => {
         try {
-          const r = await fetch(url)
+          const r = await fetch(url, { cache: "no-store" })
           const body = await r.json().catch(() => null)
           if (!r.ok) throw new Error(name + " " + r.status)
           if (cancelled) return
@@ -79,9 +103,17 @@ export default function Home() {
           errs.push(e.message || String(e))
         }
       }))
-      if (!cancelled && errs.length) setErr(errs.join(" · "))
-    })()
-    return () => { cancelled = true }
+      if (cancelled) return
+      setUpdated(new Date())
+      if (errs.length && first) setErr(errs.join(" · "))
+      if (!errs.length) setErr(null)
+    }
+    load(true)
+    const timer = setInterval(() => load(false), 30000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
   }, [sym])
 
   const days = RANGES.find(r => r.id === range)?.days
@@ -102,6 +134,9 @@ export default function Home() {
   return (
     <div style={{ fontFamily: "system-ui", maxWidth: 1180, margin: "0 auto", padding: 24 }}>
       <h1>中证500波段</h1>
+      <div style={{ color: "#6b7280", fontSize: 13, marginTop: -8, marginBottom: 12 }}>
+        当前页每 30 秒自己更新，不用刷新。{updated ? " 上次更新 " + clock(updated) : ""}
+      </div>
       <div style={{ marginBottom: 16 }}>
         {Object.entries(NAMES).map(([k, v]) => (
           <button key={k} onClick={() => setSym(k)}

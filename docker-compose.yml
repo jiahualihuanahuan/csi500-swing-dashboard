@@ -21,7 +21,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://csi500:csi500@postgres:5432/csi500
-      FETCH_INTERVAL_SEC: 60
+      FETCH_INTERVAL_SEC: 30
     restart: unless-stopped
 
   api:
