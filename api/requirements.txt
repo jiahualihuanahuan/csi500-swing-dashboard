@@ -3,3 +3,4 @@ uvicorn
 pandas
 numpy
 psycopg2-binary
+httpx
