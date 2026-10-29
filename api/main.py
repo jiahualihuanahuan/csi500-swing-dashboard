@@ -346,6 +346,25 @@ def backtest(symbol: str = "etf_510500", start: str = "2022-01-01", end: str | N
     grid.sort(key=lambda x: (-x["win_rate 胜率%"], -x["total_return_pct 总收益%"]))
     return {"symbol": symbol, "period 区间": f"{start} 到 {end}", "n_bars K线数": len(df), "results 结果": grid[:15]}
 
+def _extract_text(data):
+    """Pull text from a chat completion, tolerating null content / reasoning fields."""
+    try:
+        choice = (data.get("choices") or [None])[0] or {}
+        msg = choice.get("message") or {}
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        # some Qwen/vLLM builds put the answer in reasoning_content
+        reasoning = msg.get("reasoning_content") or msg.get("reasoning")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning.strip()
+        # last resort: stringify the message
+        if msg:
+            return str(msg)
+    except Exception:
+        pass
+    return None
+
 @app.get("/api/ai-recommend/{symbol}", summary="AI 技术分析建议")
 async def ai_recommend(symbol: str):
     df = _load(symbol)
@@ -388,23 +407,25 @@ async def ai_recommend(symbol: str):
 注意：这只是技术分析参考，非投资建议。"""
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             r = await client.post(
                 f"{VLLM_BASE}/chat/completions",
                 headers={"Authorization": f"Bearer {VLLM_KEY}", "Content-Type": "application/json"},
                 json={
                     "model": VLLM_MODEL,
                     "messages": [
-                        {"role": "system", "content": "你是严谨的技术分析助手，只根据给定指标说话，不编造数据。"},
+                        {"role": "system", "content": "你是严谨的技术分析助手，只根据给定指标说话，不编造数据。请直接给出结论。"},
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 400,
+                    "max_tokens": 512,
                 },
             )
             r.raise_for_status()
             data = r.json()
-            text = data["choices"][0]["message"]["content"].strip()
+            text = _extract_text(data)
+            if not text:
+                return {"error": "模型返回空内容", "raw": data, "indicators": indicators}
             return {"symbol": symbol, "indicators": indicators, "recommendation": text}
     except Exception as e:
         return {"error": f"调用模型失败: {str(e)}", "indicators": indicators}
