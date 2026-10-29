@@ -371,7 +371,6 @@ async def ai_recommend(symbol: str):
     if df.empty or len(df) < 20:
         return {"error": "数据不够，无法生成建议"}
     last = df.iloc[-1]
-    _, label, phase = position_now(df)
     indicators = {
         "日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
         "收盘价": num(last.close),
@@ -383,28 +382,22 @@ async def ai_recommend(symbol: str):
         "KDJ_D": num(last.d, 1),
         "KDJ_J": num(last.j, 1),
         "Z值": num(last.zscore, 2),
+        "MA5": num(last.ma5),
+        "MA10": num(last.ma10),
+        "MA20": num(last.ma20),
         "MA50": num(last.ma50),
-        "价格相对MA50": "下方" if last.close < last.ma50 else "上方",
+        "MA200": num(last.ma200),
+        "布林上轨": num(last.bb_up),
         "布林下轨": num(last.bb_low),
-        "当前阶段": phase,
-        "建议仓位": label,
+        "价格相对MA50": "下方" if last.close < last.ma50 else "上方",
     }
-    prompt = f"""你是中证500波段交易助手。请根据以下最新技术指标，结合系统规则给出简短中文建议（不超过150字）。
-
-系统规则摘要：
-- RSI越低买得越多：≤25买一成，≤20三成，≤15四成，≤10六成。高于25不加仓。
-- 50以下全留，50-70逐步减仓，>70空仓。
-- 跌破MA50趋势过滤时不开新仓。
+    prompt = f"""请根据以下中证500相关标的的最新技术指标数据，给出你自己的技术分析观点和操作建议（中文，简洁明了，不超过200字）。
 
 当前指标：
 {chr(10).join(f"- {k}: {v}" for k, v in indicators.items())}
 
-请输出：
-1. 当前市场状态简述
-2. 是否符合买入/持有/减仓条件
-3. 一句话操作建议
-
-注意：这只是技术分析参考，非投资建议。"""
+请直接分析市场状态并给出你的看法。不要追问，直接输出分析和建议。
+注意：仅为技术分析参考，非投资建议。"""
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -414,10 +407,10 @@ async def ai_recommend(symbol: str):
                 json={
                     "model": VLLM_MODEL,
                     "messages": [
-                        {"role": "system", "content": "你是严谨的技术分析助手，只根据给定指标说话，不编造数据。请直接给出结论。"},
+                        {"role": "system", "content": "你是一位技术分析助手。请只根据用户提供的指标数据进行分析，不要编造数据，不要提及任何预设规则。直接给出分析结论。"},
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": 0.3,
+                    "temperature": 0.4,
                     "max_tokens": 512,
                 },
             )
