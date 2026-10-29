@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const UP = "#dc2626"
 const DOWN = "#16a34a"
@@ -50,6 +50,16 @@ export default function PriceChart({ rows }) {
   const bagRef = useRef(null)
   const rowsRef = useRef(rows)
   rowsRef.current = rows
+
+  const [isMobile, setIsMobile] = useState(false)
+  const [showNotes, setShowNotes] = useState(false)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener("resize", check)
+    return () => window.removeEventListener("resize", check)
+  }, [])
 
   useEffect(() => {
     if (!ref.current) return
@@ -117,7 +127,7 @@ export default function PriceChart({ rows }) {
           lc.createTextWatermark(pane, {
             horzAlign: "left",
             vertAlign: "top",
-            lines: [{ text: NOTES[i].title, color: "rgba(17,24,39,0.88)", fontSize: 13, fontStyle: "bold" }],
+            lines: [{ text: NOTES[i].title, color: "rgba(17,24,39,0.88)", fontSize: isMobile ? 11 : 13, fontStyle: "bold" }],
           })
         }
       })
@@ -131,23 +141,46 @@ export default function PriceChart({ rows }) {
       chart?.remove()
       bagRef.current = null
     }
-  }, [])
+  }, [isMobile])
 
   useEffect(() => {
     paint(bagRef.current, rows)
   }, [rows])
 
+  const chartHeight = isMobile ? "min(85vh, 900px)" : 1080
+
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "stretch" }}>
-      <div ref={ref} style={{ flex: "1 1 auto", height: 1080, minWidth: 0 }} />
-      <div style={{ width: 232, height: 1080, display: "flex", flexDirection: "column" }}>
-        {NOTES.map(n => (
-          <div key={n.title} style={{ flex: n.w, overflow: "hidden", borderBottom: "1px solid #e5e7eb", padding: "6px 0", fontSize: 12, lineHeight: 1.45 }}>
-            <div style={{ fontWeight: 700, marginBottom: 2 }}>{n.title}</div>
-            <div style={{ color: "#374151" }}>{n.body}</div>
-          </div>
-        ))}
-      </div>
+    <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 12, alignItems: "stretch" }}>
+      <div ref={ref} style={{ flex: "1 1 auto", height: chartHeight, minWidth: 0, width: "100%" }} />
+      {isMobile ? (
+        <div>
+          <button
+            onClick={() => setShowNotes(!showNotes)}
+            style={{ width: "100%", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: 6, background: "#f9fafb", fontSize: 13, fontWeight: 600 }}
+          >
+            {showNotes ? "收起说明" : "查看指标说明"}
+          </button>
+          {showNotes && (
+            <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.45 }}>
+              {NOTES.map(n => (
+                <div key={n.title} style={{ marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid #e5e7eb" }}>
+                  <div style={{ fontWeight: 700, marginBottom: 2 }}>{n.title}</div>
+                  <div style={{ color: "#374151" }}>{n.body}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ width: 232, height: 1080, display: "flex", flexDirection: "column", flexShrink: 0 }}>
+          {NOTES.map(n => (
+            <div key={n.title} style={{ flex: n.w, overflow: "hidden", borderBottom: "1px solid #e5e7eb", padding: "6px 0", fontSize: 12, lineHeight: 1.45 }}>
+              <div style={{ fontWeight: 700, marginBottom: 2 }}>{n.title}</div>
+              <div style={{ color: "#374151" }}>{n.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
