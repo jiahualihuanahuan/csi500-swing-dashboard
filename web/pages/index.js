@@ -97,7 +97,7 @@ export default function Home() {
         try {
           const r = await fetch(url, { cache: "no-store" })
           const body = await r.json().catch(() => null)
-          if (!r.ok) throw new Error(name + " " + r.status)
+          if (!r.ok) throw new Error(name + " " + r.status + (body?.error ? ": " + body.error : ""))
           if (cancelled) return
           set(body)
           if (body && body.error) errs.push(name + "：" + body.error)
@@ -124,8 +124,12 @@ export default function Home() {
     try {
       const r = await fetch(`${API}/api/ai-recommend/${sym}`, { cache: "no-store" })
       const body = await r.json().catch(() => null)
-      if (!r.ok) throw new Error(body?.error || r.status)
-      setAi(body)
+      if (!r.ok) throw new Error(body?.error || ("HTTP " + r.status))
+      if (body && body.error) {
+        setAi(body)
+      } else {
+        setAi(body)
+      }
     } catch (e) {
       setAi({ error: e.message || String(e) })
     } finally {
@@ -135,6 +139,7 @@ export default function Home() {
 
   const days = RANGES.find(r => r.id === range)?.days
   const view = useMemo(() => sliceRange(Array.isArray(bars) ? bars : [], days), [bars, days])
+  const chartError = bars && !Array.isArray(bars) && bars.error
 
   const todayClose = field(order, "today_close")
   const todayRsi = field(order, "today_rsi")
@@ -193,7 +198,13 @@ export default function Home() {
             ))}
           </div>
         </div>
-        {view.length > 0 ? <PriceChart rows={view} /> : <div style={{ padding: 24, color: "#6b7280" }}>图还在加载…</div>}
+        {chartError ? (
+          <div style={{ padding: 24, color: "#dc2626" }}>图加载失败：{chartError}</div>
+        ) : view.length > 0 ? (
+          <PriceChart rows={view} />
+        ) : (
+          <div style={{ padding: 24, color: "#6b7280" }}>图还在加载…</div>
+        )}
       </div>
 
       {order && !order.error && (
@@ -227,7 +238,7 @@ export default function Home() {
             {aiLoading ? "生成中…" : "生成建议"}
           </button>
         </div>
-        {ai?.error && <div style={{ color: "#dc2626" }}>{ai.error}</div>}
+        {ai?.error && <div style={{ color: "#dc2626", whiteSpace: "pre-wrap" }}>{ai.error}</div>}
         {ai?.recommendation && (
           <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, color: "#1e3a8a" }}>
             {ai.recommendation}
