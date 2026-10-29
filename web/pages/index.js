@@ -70,13 +70,15 @@ export default function Home() {
   const [updated, setUpdated] = useState(null)
   const [sym, setSym] = useState("etf_510500")
   const [range, setRange] = useState("1y")
+  const [ai, setAi] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     let backtestAt = 0
     const load = async (first) => {
       if (first) {
-        setSig(null); setBt(null); setOrder(null); setBars(null); setErr(null)
+        setSig(null); setBt(null); setOrder(null); setBars(null); setErr(null); setAi(null)
       }
       const jobs = [
         ["信号", `${API}/api/signals/${sym}`, setSig],
@@ -115,6 +117,21 @@ export default function Home() {
       clearInterval(timer)
     }
   }, [sym])
+
+  const loadAi = async () => {
+    setAiLoading(true)
+    setAi(null)
+    try {
+      const r = await fetch(`${API}/api/ai-recommend/${sym}`, { cache: "no-store" })
+      const body = await r.json().catch(() => null)
+      if (!r.ok) throw new Error(body?.error || r.status)
+      setAi(body)
+    } catch (e) {
+      setAi({ error: e.message || String(e) })
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   const days = RANGES.find(r => r.id === range)?.days
   const view = useMemo(() => sliceRange(Array.isArray(bars) ? bars : [], days), [bars, days])
@@ -201,6 +218,23 @@ export default function Home() {
           <div style={{ marginTop: 8, color: "#4b5563", fontSize: 13 }}>{note}</div>
         </div>
       )}
+
+      <div style={{ border: "1px solid #bfdbfe", borderRadius: 8, padding: 16, marginBottom: 24, background: "#eff6ff" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <b>AI 技术分析建议</b>
+          <button onClick={loadAi} disabled={aiLoading}
+            style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #2563eb", background: aiLoading ? "#dbeafe" : "#2563eb", color: "#fff", cursor: aiLoading ? "wait" : "pointer" }}>
+            {aiLoading ? "生成中…" : "生成建议"}
+          </button>
+        </div>
+        {ai?.error && <div style={{ color: "#dc2626" }}>{ai.error}</div>}
+        {ai?.recommendation && (
+          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, color: "#1e3a8a" }}>
+            {ai.recommendation}
+          </div>
+        )}
+        {!ai && !aiLoading && <div style={{ color: "#6b7280", fontSize: 13 }}>点击按钮，把当前 RSI / MACD / KDJ / Z值 等指标喂给本地模型生成建议。</div>}
+      </div>
 
       {results && (
         <div>
