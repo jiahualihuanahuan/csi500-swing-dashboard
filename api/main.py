@@ -5,10 +5,14 @@ import os, datetime as dt
 import pandas as pd
 import numpy as np
 import psycopg2
+import httpx
 
 app = FastAPI(title="CSI500 API 中证500 API", description="中证500指数与ETF波段交易信号、仓位、回测接口")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 DB = os.environ["DATABASE_URL"]
+VLLM_BASE = os.environ.get("VLLM_BASE_URL", "http://192.168.86.35:8001/v1")
+VLLM_KEY = os.environ.get("VLLM_API_KEY", "vllm-secret-key")
+VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-8B-AWQ")
 
 DDL = """
 CREATE TABLE IF NOT EXISTS bars (
@@ -341,3 +345,66 @@ def backtest(symbol: str = "etf_510500", start: str = "2022-01-01", end: str | N
                         })
     grid.sort(key=lambda x: (-x["win_rate 胜率%"], -x["total_return_pct 总收益%"]))
     return {"symbol": symbol, "period 区间": f"{start} 到 {end}", "n_bars K线数": len(df), "results 结果": grid[:15]}
+
+@app.get("/api/ai-recommend/{symbol}", summary="AI 技术分析建议")
+async def ai_recommend(symbol: str):
+    df = _load(symbol)
+    if df.empty or len(df) < 20:
+        return {"error": "数据不够，无法生成建议"}
+    last = df.iloc[-1]
+    _, label, phase = position_now(df)
+    indicators = {
+        "日期": pd.Timestamp(last.date).strftime("%Y-%m-%d"),
+        "收盘价": num(last.close),
+        "RSI": num(last.rsi, 1),
+        "MACD": num(last.macd, 4),
+        "MACD信号线": num(last.signal, 4),
+        "MACD柱": num(last.hist, 4),
+        "KDJ_K": num(last.k, 1),
+        "KDJ_D": num(last.d, 1),
+        "KDJ_J": num(last.j, 1),
+        "Z值": num(last.zscore, 2),
+        "MA50": num(last.ma50),
+        "价格相对MA50": "下方" if last.close < last.ma50 else "上方",
+        "布林下轨": num(last.bb_low),
+        "当前阶段": phase,
+        "建议仓位": label,
+    }
+    prompt = f"""你是中证500波段交易助手。请根据以下最新技术指标，结合系统规则给出简短中文建议（不超过150字）。
+
+系统规则摘要：
+- RSI越低买得越多：≤25买一成，≤20三成，≤15四成，≤10六成。高于25不加仓。
+- 50以下全留，50-70逐步减仓，>70空仓。
+- 跌破MA50趋势过滤时不开新仓。
+
+当前指标：
+{chr(10).join(f"- {k}: {v}" for k, v in indicators.items())}
+
+请输出：
+1. 当前市场状态简述
+2. 是否符合买入/持有/减仓条件
+3. 一句话操作建议
+
+注意：这只是技术分析参考，非投资建议。"""
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(
+                f"{VLLM_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {VLLM_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": VLLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "你是严谨的技术分析助手，只根据给定指标说话，不编造数据。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 400,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data["choices"][0]["message"]["content"].strip()
+            return {"symbol": symbol, "indicators": indicators, "recommendation": text}
+    except Exception as e:
+        return {"error": f"调用模型失败: {str(e)}", "indicators": indicators}
